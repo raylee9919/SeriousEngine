@@ -28,9 +28,9 @@ float3 tonemap_aces(float3 x) {
 
 float3 tonemap_jodie_reinhard(float3 c) {
     // https://www.shadertoy.com/view/tdSXzD
-    float l = dot(c, float3(0.2126, 0.7152, 0.0722));
+    float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
     float3 tc = c / (c + 1.0);
-    return lerp(c / (l + 1.0), tc, tc);
+    return lerp(c / (luma + 1.0), tc, tc);
 }
 
 float3 srgb_from_linear(float3 c) {
@@ -61,7 +61,7 @@ float4 ps_main(PS_Input input) : SV_TARGET
     float3 color = color_texture.Sample(linear_sampler, input.screen_uv);
 
     // Tone mapping.
-    color = tonemap_reinhard(color);
+    color = tonemap_jodie_reinhard(color);
 
     // Accurate gamma correction
     color = srgb_from_linear(color);

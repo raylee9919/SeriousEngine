@@ -2,6 +2,7 @@
 
 #define PI              3.14159265
 #define TWO_PI          6.28318530
+#define QUARTER_PI      0.78539816339
 #define NDC_DEPTH_MAX   1.0
 static const float  PLANET_RADIUS       = 6360e3;
 static const float  ATMOSPHERE_RADIUS   = 6420e3;
@@ -108,12 +109,10 @@ float3 ps_main(PS_Input input) : SV_TARGET
     Texture2D <float3> weather_map = ResourceDescriptorHeap[push.weather_map_id];
 
     // Sun
-    //float  rcp_max_luminous_efficacy = 1.0 / 683.002;
     float  sun_solid_angle           = TWO_PI * (1.0 - cos(push.sun_angular_radius));
     float3 sun_illuminance           = push.sun_illuminance;
     float3 sun_luminance             = sun_illuminance / sun_solid_angle;
     float3 sun_transmittance         = float3(0.925, 0.861, 0.755);
-    //float3 sun_outer_radiosity       = (sun_luminance / sun_transmittance) * rcp_max_luminous_efficacy;
     float3 sun_outer_luminance       = (sun_luminance / sun_transmittance);
 
     // 
@@ -201,9 +200,13 @@ float3 ps_main(PS_Input input) : SV_TARGET
 
     // Our light buffer being FLOAT16 is the reason why we are multiplying 
     // exposure here to prevent overflow.
-    float EV100    = compute_EV100(16, 1.0/125.0, 100.0);
+    float N = 16;
+    float EV100    = compute_EV100(N, 1.0/125.0, 100.0);
     float exposure = exposure_from_EV100(EV100);
     L *= exposure;
+
+    // Lens
+    L *= (QUARTER_PI / (N*N));
 
     return L;
 }

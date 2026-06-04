@@ -83,9 +83,20 @@ float phase_rayleigh(float u) {
     return 0.05968310365 * (1 + u*u);
 }
 
-float phase_mie(float u, float g) {
+float phase_mie_cornett(float u, float g) {
     float g2 = g*g;
     return 0.11936620731 * (((1 - g2)*(1 + u*u)) / ((2 + g2) * pow(1 + g2 - 2*g*u, 1.5))); // @Todo: abs...?
+}
+
+float phase_mie_klein_nishina(float u, float g) {
+    float e = 1.0;
+    for (int i = 0; i < 8; ++i) {
+        float g_from_e = 1.0 / e - 2.0 / log(2.0 * e + 1.0) + 1.0;
+        float deriv = 4.0 / ((2.0 * e + 1.0) * pow(log(2.0 * e + 1.0), 2)) - 1.0 / pow(e, 2);
+        if (abs(deriv) < 1e-7) break;
+        e = e - (g_from_e - g) / deriv;
+    }
+    return e / (2.0 * PI * (e * (1.0 - u) + 1.0) * log(2.0 * e + 1.0));
 }
 
 PS_Input vs_main(uint vertex_id : SV_VertexID)
@@ -137,29 +148,42 @@ float3 ps_main(PS_Input input) : SV_TARGET
     float3 X        = camera_position + dX;                 // Sample position along view direction
     float3 L0       = sun_outer_luminance;                  // Initial luminance
     float mu        = dot(view_dir, to_light);              // Cosine of view dir and light dir
+
+    // Coefficients (often denoted as sigma in papers)
     float3 Sr       = float3(5.802e-6, 13.558e-6, 33.1e-6); // Rayleigh scattering
-    float3 Sm       = 2.1e-5;                               // Mie scattering. @Todo: Change according to weather, pollution, etc.
-    float Pr        = phase_rayleigh(mu);                   // Rayleigh phase function
-    float Pm        = phase_mie(mu, 0.76);                  // Mie phase function
-    float Dr        = 8e3;                                  // Rayleigh distribution
-    float Dm        = 1.2e3;                                // Mie distribution
-    float ODr       = 0.0;                                  // Optical depth
-    float ODm       = 0.0;                                  // 
+    float3 Sm       = 3.996e-6;                             // Mie scattering
+    float3 Am       = 4.40e-6;                              // Mie absorption
+    float3 Ao       = float3(0.650e-6, 1.881e-6, 0.085e-6); // Ozone absorption
+
+    // Phase functions
+    float Pr        = phase_rayleigh(mu);
+    float Pm        = phase_mie_klein_nishina(mu, 0.8); // https://twitter.com/Cody_J_Bennett/status/2055998057406181504
+
+    // Density distribution constants
+    float Hr        = 8e3;
+    float Hm        = 1.2e3;
+
+    // Optical depth
+    float ODr       = 0.0;
+    float ODm       = 0.0;
+    float ODo       = 0.0;
+
     float3 sum_r    = 0.0;
     float3 sum_m    = 0.0;
-
-    float3 T_view  = 1.0;
+    float3 sum_o    = 0.0;
 
     [loop]
     for (int i = 0; i < push.num_view_samples; ++i) {
-        float h = altitude_of(X); // Altitude
+        float altitude = altitude_of(X);
 
         // Sampled density
-        float Hr = exp(-h / Dr) * step_size;
-        float Hm = exp(-h / Dm) * step_size;
+        float Dr = step_size * exp(-altitude / Hr);
+        float Dm = step_size * exp(-altitude / Hm);
+        float Do = step_size * max(0, 1 - (abs(altitude - 25e3) / 15e3));
 
-        ODr += Hr;
-        ODm += Hm;
+        ODr += Dr;
+        ODm += Dm;
+        ODo += Do;
 
         float t0, t1;
         ray_sphere(X, to_light, PLANET_CENTER, ATMOSPHERE_RADIUS, t0, t1);
@@ -169,34 +193,30 @@ float3 ps_main(PS_Input input) : SV_TARGET
         float3 sample_L   = X + step_L;
         float ODr_L = 0;
         float ODm_L = 0;
+        float ODo_L = 0;
 
         for (int j = 0; j < push.num_sun_samples; ++j) {
             float h_L = altitude_of(sample_L);
 
-            ODr_L += exp(-h_L / Dr) * step_size_L;
-            ODm_L += exp(-h_L / Dm) * step_size_L;
+            ODr_L += exp(-h_L / Hr) * step_size_L;
+            ODm_L += exp(-h_L / Hm) * step_size_L;
+            ODo_L += max(0, 1 - (abs(h_L - 25e3) / 15e3));
 
             sample_L += step_L;
         }
 
-        float3 tau = (Sr * (ODr + ODr_L)) + (Sm * 1.11 * (ODm + ODm_L));
-        float3 attenuation = exp(-tau);
-        sum_r += attenuation * Hr;
-        sum_m += attenuation * Hm;
+        float3 tau = (Sr*(ODr + ODr_L)) + ((Sm + Am)*(ODm + ODm_L)) + (Ao*(ODo + ODo_L));
+        float3 transmittance = exp(-tau);
+        sum_r += transmittance * Dr;
+        sum_m += transmittance * Dm;
+        sum_o += transmittance * Do;
 
         X += dX;
-
-        if (i == push.num_view_samples - 1) {
-            T_view = exp(-(ODr * Sr + ODm * Sm * 1.11));
-        }
     }
 
     float3 L = L0;
-    float3 T = ((sum_r * Sr * Pr) + (sum_m * Sm * Pm));
+    float3 T = (sum_r*Sr*Pr) + (sum_m*Sm*Pm);
     L *= T;
-
-    // @Temporary: Sun disk
-    L += smoothstep(cos(push.sun_angular_radius), 1.0, dot(view_dir, to_light)) * L0 * T_view;
 
     // Our light buffer being FLOAT16 is the reason why we are multiplying 
     // exposure here to prevent overflow.

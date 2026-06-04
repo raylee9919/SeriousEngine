@@ -1278,6 +1278,8 @@ int main()
                 defer_pass->execute(resource_state, cmd_list, param);
             }
 
+            //sun_theta = (cos(shader_time*0.25f) * 0.5f + 0.5f) * 90.0f - 10.0f;
+
             if (1) {
                 float theta   = to_radian(sun_theta);
                 float azimuth = to_radian(sun_azimuth);
